@@ -70,7 +70,7 @@ class Application:
     vi_score: int  # Сумма баллов за ВИ
     subject1_score: int  # Баллы по предмету 1
     subject2_score: int  # Баллы по предмету 2
-    id_achievements: int  # Баллы за общие ИД
+    id_achievements: int  # Баллы за общие ИД (индивидуальные достижения)
     target_id_achievements: int  # Баллы за целевые ИД
     priority: int  # Приоритет
     consent: bool  # Наличие согласия (“+” → True)

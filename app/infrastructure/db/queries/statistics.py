@@ -2,6 +2,7 @@
 
 from typing import List, Tuple
 
+import numpy as np
 from sqlalchemy import func, desc, asc
 from sqlalchemy.orm import Session
 
@@ -165,3 +166,36 @@ def total_applications(
     """
     q = session.query(func.count()).select_from(ApplicationModel)
     return q.scalar() or 0
+
+
+def subject1_score_distribution(session):
+    """
+    Возвращает список subject1_score (без 0 и 100), а также считает распределение по диапазонам, среднее, медиану, дисперсию.
+    """
+    # Получить все подходящие баллы
+    scores = [
+        s for (s,) in session.query(ApplicationModel.subject1_score)
+        .join(ProgramModel, ProgramModel.code == ApplicationModel.program_code)
+        .filter(
+            ProgramModel.is_ino.is_(False),
+            ApplicationModel.subject1_score > 0,
+            ApplicationModel.subject1_score < 100
+        )
+        .all()
+    ]
+    if not scores:
+        return [], {}, None, None, None
+
+    # Разбивка по диапазонам
+    bins = list(range(0, 101, 10))
+    hist, _ = np.histogram(scores, bins=bins)
+    ranges = [f"{bins[i]}–{bins[i + 1]}" for i in range(len(bins) - 1)]
+    total = sum(hist)
+    distr = {ranges[i]: round(hist[i] / total * 100, 1) for i in range(len(hist))}
+
+    # Статистики
+    mean = np.mean(scores)
+    median = np.median(scores)
+    var = np.var(scores)
+
+    return scores, distr, mean, median, var
