@@ -139,3 +139,29 @@ def total_places_non_ino(
         .filter(ProgramModel.is_ino.is_(False))
     )
     return q.scalar() or 0
+
+
+def count_exam_submitted(
+        session: Session
+) -> int:
+    """
+    Число заявок, у которых оба экзаменационных балла > 0.
+    """
+    q = (
+        session.query(func.count())
+        .select_from(ApplicationModel)
+        .filter(
+            ApplicationModel.subject1_score > 0
+        )
+    )
+    return q.scalar() or 0
+
+
+def total_applications(
+        session: Session
+) -> int:
+    """
+    Общее число заявок.
+    """
+    q = session.query(func.count()).select_from(ApplicationModel)
+    return q.scalar() or 0
