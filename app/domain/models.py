@@ -1,3 +1,4 @@
+import datetime
 from dataclasses import dataclass
 
 
@@ -37,3 +38,40 @@ class Program:
     department_code: str
     is_ino: bool = False
     is_international: bool = False
+
+
+@dataclass
+class SubmissionStats:
+    """
+    Сводка по направлению.
+    """
+    program_code: str  # FK → Program.code
+    num_places: int  # из <span id="numPlaces">
+    num_applications: int  # из <span id="numApplications">
+    generated_at: datetime  # время формирования из <span id="date_info">
+
+
+@dataclass
+class Applicant:
+    """
+    Абитуриент.
+    """
+    id: str  # Уникальный код поступающего
+
+
+@dataclass
+class Application:
+    """
+    Заявка абитуриента по направлению.
+    """
+    program_code: str  # FK → Program.code
+    applicant_id: str  # FK → Applicant.id
+    total_score: int  # Сумма конкурсных баллов
+    vi_score: int  # Сумма баллов за ВИ
+    subject1_score: int  # Баллы по предмету 1
+    subject2_score: int  # Баллы по предмету 2
+    id_achievements: int  # Баллы за общие ИД
+    target_id_achievements: int  # Баллы за целевые ИД
+    priority: int  # Приоритет
+    consent: bool  # Наличие согласия (“+” → True)
+    review_status: str  # Информация о рассмотрении
