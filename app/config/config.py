@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     # таймзона
     timezone_name: str = Field("UTC", alias="TIMEZONE")
 
+    bot_token: str = Field("BOT_TOKEN", alias="BOT_TOKEN")
+
+    chrome_bin: str = Field("CHROME_BIN", alias="CHROME_BIN")
+
     # БД
     db_url: str | None = Field(None, alias="DATABASE_URL")
     db_filename: str = Field("master.db", alias="DB_FILENAME")

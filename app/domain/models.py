@@ -75,3 +75,23 @@ class Application:
     priority: int  # Приоритет
     consent: bool  # Наличие согласия (“+” → True)
     review_status: str  # Информация о рассмотрении
+
+
+@dataclass
+class ProgramPassingQuantile:
+    """
+    Квантиль 90 / 95 % проходного балла по направлению.
+    """
+    program_code: str
+    q90: float
+    q95: float
+
+
+@dataclass
+class AdmissionProbability:
+    """
+    Вероятность поступления абитуриента на конкретное направление.
+    """
+    applicant_id: str
+    program_code: str
+    probability: float

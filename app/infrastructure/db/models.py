@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Boolean, ForeignKey, Integer, DateTime
+from sqlalchemy import Column, String, Boolean, ForeignKey, Integer, DateTime, Float
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 
@@ -65,3 +65,31 @@ class ApplicationModel(Base):
 
     applicant = relationship('ApplicantModel')
     program = relationship('ProgramModel')
+
+
+# ────────── Monte‑Carlo результаты ───────────────────────────────────────
+class ProgramQuantileModel(Base):
+    """
+    q90 / q95 проходного балла по направлению.
+    """
+    __tablename__ = "program_quantiles"
+
+    program_code = Column(String, ForeignKey("programs.code"), primary_key=True)
+    q90 = Column(Float, nullable=False)
+    q95 = Column(Float, nullable=False)
+
+    program = relationship("ProgramModel")
+
+
+class AdmissionProbabilityModel(Base):
+    """
+    Вероятность поступления: (applicant_id, program_code) -> probability
+    """
+    __tablename__ = "admission_probabilities"
+
+    applicant_id = Column(String, ForeignKey("applicants.id"), primary_key=True)
+    program_code = Column(String, ForeignKey("programs.code"), primary_key=True)
+    probability = Column(Float, nullable=False)
+
+    applicant = relationship("ApplicantModel")
+    program = relationship("ProgramModel")

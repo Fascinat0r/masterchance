@@ -26,6 +26,7 @@ class MasterApplicationsParser:
     def __init__(self, headless: bool = True):
         logger.info("Запускаем ChromeDriver (headless=%s)", headless)
         options = webdriver.ChromeOptions()
+        # options.binary_location = settings.chrome_bin
         if headless:
             options.add_argument("--headless")
         options.add_argument("--no-sandbox")
