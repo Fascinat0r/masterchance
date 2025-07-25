@@ -26,6 +26,9 @@ class RecalculateMonteCarloUseCase:
         appl_df = self._df_from_records(self._repo.get_all_applicants())
         stats_df = self._df_from_records(self._repo.get_all_submission_stats())
 
+        # meta‑таблица всех направлений, нужна для exam_id
+        prog_meta_df = self._repo.get_program_meta_df()
+
         logger.info("Monte‑Carlo input: %d apps, %d applicants, %d stats",
                     len(apps_df), len(appl_df), len(stats_df))
 
@@ -33,6 +36,7 @@ class RecalculateMonteCarloUseCase:
             applications=apps_df,
             applicants=appl_df,
             submission_stats=stats_df,
+            programs_meta=prog_meta_df,
             n_simulations=self._n_sim,
             random_seed=None,
         )

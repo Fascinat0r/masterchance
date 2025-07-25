@@ -1,6 +1,7 @@
 # repositories/program_repository.py
 from typing import Dict, Iterable, List, Sequence
 
+import pandas as pd
 from sqlalchemy import delete
 from sqlalchemy import func
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -373,6 +374,23 @@ class ProgramRepository:
             set_=update_cols,
         )
         self._session.execute(upsert_stmt)
+
+    def get_program_meta_df(self) -> "pd.DataFrame":
+        """
+        Вернуть DataFrame:
+            program_code | department_code | is_international
+        Используется Monte‑Carlo для построения exam_id.
+        """
+        rows = (
+            self._session.query(
+                ProgramModel.code,
+                ProgramModel.department_code,
+                ProgramModel.is_international,
+            ).all()
+        )
+        return pd.DataFrame(
+            rows, columns=["program_code", "department_code", "is_international"]
+        )
 
     def commit(self) -> None:
         self._session.commit()
