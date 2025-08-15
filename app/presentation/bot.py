@@ -2,6 +2,7 @@
 Telegram‑бот, показывающий направления, квантили и шансы.
 """
 import asyncio
+from datetime import datetime
 from textwrap import dedent
 from typing import List, Dict
 
@@ -12,6 +13,7 @@ from aiogram.types import Message
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app.application.use_cases.get_last_update_time import GetLastUpdateTimeUseCase
 from app.config.config import settings
 from app.config.logger import logger
 from app.domain.models import Program
@@ -124,14 +126,29 @@ async def how_cmd(msg: Message):
 
 # ────────── handlers ───────────────────────────────────────────────────────
 async def start_cmd(msg: Message):
+    # Берём дату последнего обновления через юзкейс
+    session = _Session()
+    repo = ProgramRepository(session)
+    try:
+        last_dt = GetLastUpdateTimeUseCase(repo).execute()
+    except Exception:
+        last_dt = None
+    finally:
+        session.close()
+
+    def _fmt(dt: datetime | None) -> str:
+        return dt.strftime("%d.%m.%Y %H:%M") if dt else "нет данных"
+
+    last_str = _fmt(last_dt)
+
     await msg.answer(
-        dedent("""
+        dedent(f"""
         Привет! Отправь мне **код абитуриента** — покажу все направления, 
         куда поданы документы, «средний» (90 %) и «высокий» (95 %) 
         проходные баллы и шанс зачисления.
-        
-        Последнее обновление данных: **25.07.2025 21:15**
-        
+
+        Последнее обновление данных: **{last_str}**
+
         /how - как это работает?
         """).strip(),
         parse_mode="Markdown"

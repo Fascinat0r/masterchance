@@ -1,6 +1,6 @@
 # app/config/config.py
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from pydantic import Field, model_validator
@@ -35,6 +35,20 @@ class Settings(BaseSettings):
     db_url: str | None = Field(None, alias="DATABASE_URL")
     db_filename: str = Field("master.db", alias="DB_FILENAME")
     db_echo: bool = Field(False, alias="DB_ECHO")
+
+    # ───────────────── Monte-Carlo: «отток» сильных ───────────────────
+    # Включение механики оттока (True — включено, False — legacy-поведение).
+    mc_opt_out_enabled: bool = Field(True, alias="MC_OPTOUT_ENABLED")
+    # Доля выбывающих среди тех, у кого НИГДЕ нет согласия (consent=False по всем его заявлениям).
+    # Значение 0.2 означает «ровно 20% из пула E будем исключать в каждой симуляции».
+    mc_opt_out_ratio: float = Field(0.20, alias="MC_OPTOUT_RATIO")
+    # Крутизна зависимости шанса «уйти» от перцентиля способности (vi).
+    # Вероятности пропорциональны p^alpha, где p — перцентиль, alpha>=1 (3 — агрессивнее).
+    mc_opt_out_strength: float = Field(3.0, alias="MC_OPTOUT_STRENGTH")
+    # Режим выбора набора «ушедших»:
+    #  - "per_simulation": в КАЖДОЙ симуляции выбираем заново (по текущим, уже импутированным vi);
+    #  - "fixed": один раз при инициализации (по детерминированной «базовой способности»).
+    mc_opt_out_mode: Literal["per_simulation", "fixed"] = Field("per_simulation", alias="MC_OPTOUT_MODE")
 
     @model_validator(mode="before")
     def _preprocess(cls, values: dict[str, Any]) -> dict[str, Any]:

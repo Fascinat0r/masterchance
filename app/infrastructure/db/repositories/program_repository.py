@@ -1,4 +1,5 @@
 # repositories/program_repository.py
+from datetime import datetime
 from typing import Dict, Iterable, List, Sequence
 
 import pandas as pd
@@ -23,17 +24,20 @@ class ProgramRepository:
         self._session = session
 
     # ——— МАППЕРЫ ——————————————————————————————————————————————
-    def _to_institute_model(self, inst: Institute) -> InstituteModel:
+    @staticmethod
+    def _to_institute_model(inst: Institute) -> InstituteModel:
         return InstituteModel(code=inst.code, name=inst.name)
 
-    def _to_department_model(self, dept: Department) -> DepartmentModel:
+    @staticmethod
+    def _to_department_model(dept: Department) -> DepartmentModel:
         return DepartmentModel(
             code=dept.code,
             name=dept.name,
             institute_code=dept.institute_code
         )
 
-    def _to_program_model(self, prog: Program) -> ProgramModel:
+    @staticmethod
+    def _to_program_model(prog: Program) -> ProgramModel:
         return ProgramModel(
             code=prog.code,
             name=prog.name,
@@ -42,17 +46,20 @@ class ProgramRepository:
             is_international=prog.is_international
         )
 
-    def _to_institute_domain(self, model: InstituteModel) -> Institute:
+    @staticmethod
+    def _to_institute_domain(model: InstituteModel) -> Institute:
         return Institute(code=model.code, name=model.name)
 
-    def _to_department_domain(self, model: DepartmentModel) -> Department:
+    @staticmethod
+    def _to_department_domain(model: DepartmentModel) -> Department:
         return Department(
             code=model.code,
             name=model.name,
             institute_code=model.institute_code
         )
 
-    def _to_program_domain(self, model: ProgramModel) -> Program:
+    @staticmethod
+    def _to_program_domain(model: ProgramModel) -> Program:
         return Program(
             code=model.code,
             name=model.name,
@@ -61,7 +68,8 @@ class ProgramRepository:
             is_international=model.is_international
         )
 
-    def _to_stats_model(self, s: SubmissionStats) -> SubmissionStatsModel:
+    @staticmethod
+    def _to_stats_model(s: SubmissionStats) -> SubmissionStatsModel:
         return SubmissionStatsModel(
             program_code=s.program_code,
             num_places=s.num_places,
@@ -69,10 +77,12 @@ class ProgramRepository:
             generated_at=s.generated_at
         )
 
-    def _to_applicant_model(self, a: Applicant) -> ApplicantModel:
+    @staticmethod
+    def _to_applicant_model(a: Applicant) -> ApplicantModel:
         return ApplicantModel(id=a.id)
 
-    def _to_application_model(self, app: Application) -> ApplicationModel:
+    @staticmethod
+    def _to_application_model(app: Application) -> ApplicationModel:
         return ApplicationModel(
             program_code=app.program_code,
             applicant_id=app.applicant_id,
@@ -87,7 +97,8 @@ class ProgramRepository:
             review_status=app.review_status
         )
 
-    def _to_stats_domain(self, m: SubmissionStatsModel) -> SubmissionStats:
+    @staticmethod
+    def _to_stats_domain(m: SubmissionStatsModel) -> SubmissionStats:
         return SubmissionStats(
             program_code=m.program_code,
             num_places=m.num_places,
@@ -95,10 +106,12 @@ class ProgramRepository:
             generated_at=m.generated_at
         )
 
-    def _to_applicant_domain(self, m: ApplicantModel) -> Applicant:
+    @staticmethod
+    def _to_applicant_domain(m: ApplicantModel) -> Applicant:
         return Applicant(id=m.id)
 
-    def _to_application_domain(self, m: ApplicationModel) -> Application:
+    @staticmethod
+    def _to_application_domain(m: ApplicationModel) -> Application:
         return Application(
             program_code=m.program_code,
             applicant_id=m.applicant_id,
@@ -113,14 +126,16 @@ class ProgramRepository:
             review_status=m.review_status
         )
 
-    def _to_quantile_model(self, q: ProgramPassingQuantile) -> ProgramQuantileModel:
+    @staticmethod
+    def _to_quantile_model(q: ProgramPassingQuantile) -> ProgramQuantileModel:
         return ProgramQuantileModel(
             program_code=q.program_code,
             q90=q.q90,
             q95=q.q95,
         )
 
-    def _to_probability_model(self, p: AdmissionProbability) -> AdmissionProbabilityModel:
+    @staticmethod
+    def _to_probability_model(p: AdmissionProbability) -> AdmissionProbabilityModel:
         return AdmissionProbabilityModel(
             applicant_id=p.applicant_id,
             program_code=p.program_code,
@@ -391,6 +406,18 @@ class ProgramRepository:
         return pd.DataFrame(
             rows, columns=["program_code", "department_code", "is_international"]
         )
+
+    def get_latest_submission_generated_at(self) -> datetime | None:
+        """
+        Максимальная дата generated_at по всем программам (submission_stats).
+        Возвращает datetime или None, если данных ещё нет.
+        """
+        ts = (
+            self._session
+            .query(func.max(SubmissionStatsModel.generated_at))
+            .scalar()
+        )
+        return ts
 
     def commit(self) -> None:
         self._session.commit()

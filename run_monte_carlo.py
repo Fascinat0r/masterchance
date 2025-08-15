@@ -19,7 +19,7 @@ def main() -> None:
 
     try:
         repo = ProgramRepository(session)
-        use_case = RecalculateMonteCarloUseCase(repo=repo, n_simulations=20_000)
+        use_case = RecalculateMonteCarloUseCase(repo=repo, n_simulations=10_000)
         use_case.execute()
         logger.info("✅ Monte‑Carlo успешно пересчитан.")
     except Exception as exc:

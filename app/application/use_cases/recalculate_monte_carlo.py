@@ -44,10 +44,6 @@ class RecalculateMonteCarloUseCase:
         return model
 
     def execute(self) -> None:
-        logger.info("→ Очистка старых Monte‑Carlo результатов…")
-        self._repo.clear_admission_probabilities()
-        self._repo.clear_program_quantiles()
-        self._repo.commit()
 
         logger.info("→ Запуск Monte‑Carlo…")
         monte = self._run_model()
@@ -66,6 +62,11 @@ class RecalculateMonteCarloUseCase:
                                      probability=prob)
                 for prog, prob in mapping.items()
             ])
+
+        logger.info("→ Очистка старых Monte‑Carlo результатов…")
+        self._repo.clear_admission_probabilities()
+        self._repo.clear_program_quantiles()
+        self._repo.commit()
 
         logger.info("→ Сохраняем: probabilities=%d, quantiles=%d",
                     len(prob_models), len(quant_models))
