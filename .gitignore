@@ -243,3 +243,5 @@ cython_debug/
 **/*.db
 /data/graphs/
 **/celerybeat*
+/data/monte_results/
+**/*.db-journal

@@ -38,17 +38,20 @@ class Settings(BaseSettings):
 
     # ───────────────── Monte-Carlo: «отток» сильных ───────────────────
     # Включение механики оттока (True — включено, False — legacy-поведение).
-    mc_opt_out_enabled: bool = Field(True, alias="MC_OPTOUT_ENABLED")
+    opt_out_enabled: bool = Field(False, alias="MC_OPTOUT_ENABLED")
     # Доля выбывающих среди тех, у кого НИГДЕ нет согласия (consent=False по всем его заявлениям).
     # Значение 0.2 означает «ровно 20% из пула E будем исключать в каждой симуляции».
-    mc_opt_out_ratio: float = Field(0.20, alias="MC_OPTOUT_RATIO")
+    opt_out_ratio: float = Field(0.20, alias="MC_OPTOUT_RATIO")
     # Крутизна зависимости шанса «уйти» от перцентиля способности (vi).
     # Вероятности пропорциональны p^alpha, где p — перцентиль, alpha>=1 (3 — агрессивнее).
-    mc_opt_out_strength: float = Field(3.0, alias="MC_OPTOUT_STRENGTH")
+    opt_out_alpha: float = Field(1.0, alias="MC_OPTOUT_STRENGTH")
     # Режим выбора набора «ушедших»:
     #  - "per_simulation": в КАЖДОЙ симуляции выбираем заново (по текущим, уже импутированным vi);
     #  - "fixed": один раз при инициализации (по детерминированной «базовой способности»).
-    mc_opt_out_mode: Literal["per_simulation", "fixed"] = Field("per_simulation", alias="MC_OPTOUT_MODE")
+    opt_out_mode: Literal["per_simulation", "fixed"] = Field("per_simulation", alias="MC_OPTOUT_MODE")
+
+    bot_show_anchored: bool = Field(True, alias="BOT_SHOW_ANCHORED",
+                                    description="Показывать условные вероятности (как если пользователь точно остаётся в Политехе)")
 
     @model_validator(mode="before")
     def _preprocess(cls, values: dict[str, Any]) -> dict[str, Any]:

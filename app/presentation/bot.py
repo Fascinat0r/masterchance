@@ -1,5 +1,5 @@
 """
-Telegram‑бот, показывающий направления, квантили и шансы.
+Telegram-бот, показывающий направления, квантили и шансы.
 """
 import asyncio
 from datetime import datetime
@@ -8,7 +8,7 @@ from typing import List, Dict
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import CommandStart, Command
+from aiogram.filters import CommandStart, Command, CommandObject
 from aiogram.types import Message
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -20,18 +20,14 @@ from app.domain.models import Program
 from app.infrastructure.db.models import Base
 from app.infrastructure.db.repositories.program_repository import ProgramRepository
 
-# ────────── DB single‑session factory ──────────────────────────────────────
 _engine = create_engine(settings.database_url, echo=False, future=True)
 Base.metadata.create_all(_engine)
 _Session = sessionmaker(bind=_engine, future=True)
 
 
-# ────────── helpers ────────────────────────────────────────────────────────
-
 def split_message(text: str, max_len: int = 4000) -> List[str]:
     parts = []
     while len(text) > max_len:
-        # Найти ближайший \n до max_len
         split_idx = text.rfind('\n', 0, max_len)
         if split_idx == -1:
             split_idx = max_len
@@ -42,10 +38,7 @@ def split_message(text: str, max_len: int = 4000) -> List[str]:
     return parts
 
 
-def _human_prog_line(dept_code: str,
-                     prog_name: str,
-                     q90: float | None,
-                     q95: float | None) -> str:
+def _human_prog_line(dept_code: str, prog_name: str, q90: float | None, q95: float | None) -> str:
     safe = f"{q90:.0f}" if q90 is not None else "—"
     high = f"{q95:.0f}" if q95 is not None else "—"
     return f"• `{dept_code}`  *{prog_name}*  —  средний ={safe}, высокий ={high}"
@@ -53,20 +46,22 @@ def _human_prog_line(dept_code: str,
 
 def _format_response(applicant_id: str,
                      all_codes: List[str],
-                     probs: Dict[str, float],
+                     probs_uncond: Dict[str, float],
                      quantiles,
-                     prog_map: Dict[str, Program]) -> str:
+                     prog_map: Dict[str, Program],
+                     diag) -> str:
     """
-    Формирует Markdown‑ответ.
-    `all_codes` – в порядке приоритетов (минимальный ↑).
+    Формирует Markdown-ответ. Показывает:
+      1) Квантили;
+      2) Вероятности «если вы точно идёте в Политех» (условные);
+      3) «С учётом оттока 20%» (безусловные);
+      4) Во сколько % симуляций вы «пролетели с магой» (оба варианта).
     """
     if not all_codes:
         return f"У абитуриента `{applicant_id}` нет поданных заявок 🤷‍♂️"
 
-    # == верх: перечень направлений + квантили ==
     head1 = "📝 *Ваши направления и ориентиры балла*"
     prog_lines: List[str] = []
-
     for code in all_codes:
         prog = prog_map.get(code)
         q = quantiles.get(code)
@@ -79,19 +74,44 @@ def _format_response(applicant_id: str,
             )
         )
 
-    # == низ: вероятность (если рассчёт есть) ==
-    head2 = "\n\n🔮 *Вероятность зачисления*"
-    prob_lines: List[str] = []
-    for code in all_codes:
-        p = probs.get(code, None)
-        if p is None:
-            continue
-        prob_lines.append(
-            f"• `{prog_map[code].name if code in prog_map else code}`  "
-            f"→  *{p * 100:.1f}%*"
-        )
+    # Диагностика
+    p_excl = diag.p_excluded if diag else 0.0
+    p_incl = max(1.0 - p_excl, 1e-9)
 
-    return "\n".join([head1, *prog_lines, head2, *prob_lines])
+    # Условные вероятности (как если пользователь точно остаётся)
+    probs_cond: Dict[str, float] = {k: min(v / p_incl, 1.0) for k, v in probs_uncond.items()}
+
+    # «Пролетел»:
+    fail_uncond = max(0.0, 1.0 - sum(probs_uncond.values()))
+    fail_cond   = min(1.0, (diag.p_fail_when_included if diag else fail_uncond / p_incl))
+
+    # Блоки вероятностей
+    head2 = "\n\n🔮 *Вероятность зачисления*"
+    lines_cond: List[str] = []
+    for code in all_codes:
+        p = probs_cond.get(code)
+        if p is not None:
+            pname = prog_map[code].name if code in prog_map else code
+            lines_cond.append(f"• `{pname}`  →  *{p * 100:.1f}%*")
+
+    # head3 = "\n\n♻️ *С учётом 20% оттока (общая модель)*"
+    # lines_uncond: List[str] = []
+    # for code in all_codes:
+    #     p = probs_uncond.get(code)
+    #     if p is not None:
+    #         pname = prog_map[code].name if code in prog_map else code
+    #         lines_uncond.append(f"• `{pname}`  →  *{p * 100:.1f}%*")
+
+    head4 = (
+        "\n\n🚫 *«Пролетел с магой»*\n"
+        f"• В *{fail_cond*100:.1f}%* симуляций\n"
+    )
+
+    # По умолчанию показываем условные сверху (настраивается в settings)
+    if settings.bot_show_anchored:
+        return "\n".join([head1, *prog_lines, head2, *lines_cond, head4])
+    else:
+        return "\n".join([head1, *prog_lines, head4, head2, *lines_cond])
 
 
 async def how_cmd(msg: Message):
@@ -121,12 +141,15 @@ async def how_cmd(msg: Message):
 
     ⚠️ *Предсказания не гарантируют поступление!*
     Это всего лишь вероятностная модель на основе того, что уже известно.
+    **Также, модель не учитывает:**
+        • Наличие заявок в другие вузы.
+        • "Неявку" на вступительные испытания.
+    В следствии чего шансы принято считать пессимистичными.
+    
     """).strip(), parse_mode="Markdown")
 
 
-# ────────── handlers ───────────────────────────────────────────────────────
 async def start_cmd(msg: Message):
-    # Берём дату последнего обновления через юзкейс
     session = _Session()
     repo = ProgramRepository(session)
     try:
@@ -139,17 +162,15 @@ async def start_cmd(msg: Message):
     def _fmt(dt: datetime | None) -> str:
         return dt.strftime("%d.%m.%Y %H:%M") if dt else "нет данных"
 
-    last_str = _fmt(last_dt)
-
     await msg.answer(
         dedent(f"""
         Привет! Отправь мне **код абитуриента** — покажу все направления, 
         куда поданы документы, «средний» (90 %) и «высокий» (95 %) 
         проходные баллы и шанс зачисления.
 
-        Последнее обновление данных: **{last_str}**
+        Последнее обновление данных: **{_fmt(last_dt)}**
 
-        /how - как это работает?
+        /how — как это работает?
         """).strip(),
         parse_mode="Markdown"
     )
@@ -164,7 +185,6 @@ async def applicant_handler(msg: Message):
     repo = ProgramRepository(session)
 
     try:
-        # ---- все направления по заявкам (порядок = min priority) ------------
         all_codes = repo.get_program_codes_by_applicant(applicant_id)
         if not all_codes:
             await msg.answer(
@@ -173,15 +193,15 @@ async def applicant_handler(msg: Message):
             )
             return
 
-        # ---- вероятности (могут отсутствовать) ------------------------------
         prob_objs = repo.get_probabilities_for_applicant(applicant_id)
-        probs = {p.program_code: p.probability for p in prob_objs}
+        probs_uncond = {p.program_code: p.probability for p in prob_objs}
 
-        # ---- справочники -----------------------------------------------------
         quantiles = repo.get_quantiles_for_programs(all_codes)
         prog_map = repo.get_programs_by_codes(all_codes)
 
-        full_text = _format_response(applicant_id, all_codes, probs, quantiles, prog_map)
+        diag = repo.get_diagnostics_for_applicant(applicant_id)
+
+        full_text = _format_response(applicant_id, all_codes, probs_uncond, quantiles, prog_map, diag)
         for part in split_message(full_text):
             try:
                 await msg.answer(part, parse_mode="Markdown")
@@ -190,13 +210,12 @@ async def applicant_handler(msg: Message):
                 break
 
     except Exception as exc:
-        logger.exception("TG‑handler error: %s", exc)
+        logger.exception("TG-handler error: %s", exc)
         await msg.answer("Произошла ошибка 😥")
     finally:
         session.close()
 
 
-# ────────── entry‑point ────────────────────────────────────────────────────
 def start_bot(bot_token) -> None:
     bot = Bot(bot_token)
     dp = Dispatcher()
@@ -205,5 +224,5 @@ def start_bot(bot_token) -> None:
     dp.message.register(how_cmd, Command("how"))
     dp.message.register(applicant_handler, F.text)
 
-    logger.info("Telegram‑бот запущен.")
+    logger.info("Telegram-бот запущен.")
     asyncio.run(dp.start_polling(bot))

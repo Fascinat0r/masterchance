@@ -93,3 +93,11 @@ class AdmissionProbabilityModel(Base):
 
     applicant = relationship("ApplicantModel")
     program = relationship("ProgramModel")
+
+
+class AdmissionDiagnosticsModel(Base):
+    __tablename__ = "admission_diagnostics"
+    applicant_id = Column(String, ForeignKey("applicants.id"), primary_key=True)
+    p_excluded = Column(Float, nullable=False)  # доля симуляций, где был исключён
+    p_fail_when_included = Column(Float, nullable=False)  # провал среди включённых
+    applicant = relationship("ApplicantModel")

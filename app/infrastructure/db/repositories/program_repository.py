@@ -11,11 +11,12 @@ from sqlalchemy.orm import Session
 
 from app.domain.models import (
     Institute, Department, Program,
-    SubmissionStats, Applicant, Application, ProgramPassingQuantile, AdmissionProbability
+    SubmissionStats, Applicant, Application, ProgramPassingQuantile, AdmissionProbability, AdmissionDiagnostics
 )
 from app.infrastructure.db.models import (
     InstituteModel, DepartmentModel, ProgramModel,
-    SubmissionStatsModel, ApplicantModel, ApplicationModel, ProgramQuantileModel, AdmissionProbabilityModel
+    SubmissionStatsModel, ApplicantModel, ApplicationModel, ProgramQuantileModel, AdmissionProbabilityModel,
+    AdmissionDiagnosticsModel
 )
 
 
@@ -143,6 +144,57 @@ class ProgramRepository:
         )
 
     # ——— CRUD МЕТОДЫ ——————————————————————————————————————————————
+
+    def clear_program_quantiles(self) -> None:
+        self._session.execute(delete(ProgramQuantileModel))
+
+    def clear_admission_probabilities(self) -> None:
+        self._session.execute(delete(AdmissionProbabilityModel))
+
+    def clear_admission_diagnostics(self) -> None:
+        self._session.execute(delete(AdmissionDiagnosticsModel))
+
+    def add_program_quantiles_bulk(self, quantiles: Iterable[ProgramPassingQuantile]) -> None:
+        objs = [self._to_quantile_model(q) for q in quantiles]
+        self._session.bulk_save_objects(objs)
+
+    def add_admission_probabilities_bulk(self, probs: Iterable[AdmissionProbability]) -> None:
+        objs = [self._to_probability_model(p) for p in probs]
+        self._session.bulk_save_objects(objs)
+
+    def add_admission_diagnostics_bulk(self, diags: Iterable[AdmissionDiagnostics]) -> None:
+        objs = [self._to_diag_model(d) for d in diags]
+        self._session.bulk_save_objects(objs)
+
+    def get_probabilities_for_applicant(self, applicant_id: str) -> List[AdmissionProbability]:
+        rows = (
+            self._session.query(AdmissionProbabilityModel)
+            .filter_by(applicant_id=applicant_id)
+            .all()
+        )
+        return [
+            AdmissionProbability(
+                applicant_id=r.applicant_id,
+                program_code=r.program_code,
+                probability=r.probability,
+            )
+            for r in rows
+        ]
+
+    def get_diagnostics_for_applicant(self, applicant_id: str) -> AdmissionDiagnostics | None:
+        r = (
+            self._session.query(AdmissionDiagnosticsModel)
+            .filter_by(applicant_id=applicant_id)
+            .one_or_none()
+        )
+        if not r:
+            return None
+        return AdmissionDiagnostics(
+            applicant_id=r.applicant_id,
+            p_excluded=r.p_excluded,
+            p_fail_when_included=r.p_fail_when_included,
+        )
+
     def add_institute(self, inst: Institute) -> None:
         orm = self._to_institute_model(inst)
         self._session.merge(orm)
@@ -241,36 +293,6 @@ class ProgramRepository:
 
     # ────────── Monte‑Carlo CRUD ──────────────────────────────────────────
     # очистка
-    def clear_program_quantiles(self) -> None:
-        self._session.execute(delete(ProgramQuantileModel))
-
-    def clear_admission_probabilities(self) -> None:
-        self._session.execute(delete(AdmissionProbabilityModel))
-
-    # массовые вставки
-    def add_program_quantiles_bulk(self, quantiles: Iterable[ProgramPassingQuantile]) -> None:
-        objs = [self._to_quantile_model(q) for q in quantiles]
-        self._session.bulk_save_objects(objs)
-
-    def add_admission_probabilities_bulk(self, probs: Iterable[AdmissionProbability]) -> None:
-        objs = [self._to_probability_model(p) for p in probs]
-        self._session.bulk_save_objects(objs)
-
-    # чтение
-    def get_probabilities_for_applicant(self, applicant_id: str) -> List[AdmissionProbability]:
-        rows = (
-            self._session.query(AdmissionProbabilityModel)
-            .filter_by(applicant_id=applicant_id)
-            .all()
-        )
-        return [
-            AdmissionProbability(
-                applicant_id=r.applicant_id,
-                program_code=r.program_code,
-                probability=r.probability,
-            )
-            for r in rows
-        ]
 
     def get_quantiles_for_programs(self, codes: Iterable[str]) -> Dict[str, ProgramPassingQuantile]:
         result: Dict[str, ProgramPassingQuantile] = {}

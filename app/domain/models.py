@@ -95,3 +95,15 @@ class AdmissionProbability:
     applicant_id: str
     program_code: str
     probability: float
+
+
+@dataclass
+class AdmissionDiagnostics:
+    """
+    Диагностика для абитуриента по результатам MC:
+    - p_excluded: доля симуляций, где он «выпал» (opt-out)
+    - p_fail_when_included: доля провалов (никуда не поступил) среди тех симуляций, где он был включён.
+    """
+    applicant_id: str
+    p_excluded: float
+    p_fail_when_included: float
