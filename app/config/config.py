@@ -30,7 +30,7 @@ class Settings(BaseSettings):
 
     chrome_bin: str = Field("CHROME_BIN", alias="CHROME_BIN")
 
-    parser_parallelism = Field(8, alias="PARSER_PARALLELISM")
+    parser_parallelism: int = Field(8, alias="PARSER_PARALLELISM")
 
     # БД
     db_url: str | None = Field(None, alias="DATABASE_URL")
