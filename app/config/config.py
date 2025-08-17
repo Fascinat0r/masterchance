@@ -21,7 +21,6 @@ class Settings(BaseSettings):
 
     # окружение
     env: str = Field("dev", alias="ENV")
-    # директория для данных
     data_dir: Path = Field(_DEFAULT_DATA_DIR, alias="DATA_DIR")
 
     # таймзона
@@ -50,8 +49,13 @@ class Settings(BaseSettings):
     #  - "fixed": один раз при инициализации (по детерминированной «базовой способности»).
     opt_out_mode: Literal["per_simulation", "fixed"] = Field("per_simulation", alias="MC_OPTOUT_MODE")
 
-    bot_show_anchored: bool = Field(True, alias="BOT_SHOW_ANCHORED",
-                                    description="Показывать условные вероятности (как если пользователь точно остаётся в Политехе)")
+    bot_show_anchored: bool = Field(True, alias="BOT_SHOW_ANCHORED")
+
+    # ───────────────── Экзамены: freeze после дедлайна ────────────────
+    # Включение механики заморозки нулей по истёкшим экзаменам
+    exam_freeze_enabled: bool = Field(True, alias="MC_EXAM_FREEZE_ENABLED")
+    # Грация (в часах) после последней даты экзамена
+    exam_grace_hours: int = Field(24, alias="MC_EXAM_GRACE_HOURS")
 
     @model_validator(mode="before")
     def _preprocess(cls, values: dict[str, Any]) -> dict[str, Any]:
@@ -61,7 +65,6 @@ class Settings(BaseSettings):
 
     @property
     def timezone(self) -> ZoneInfo:
-        # возвращаем объект зоны из строки
         return ZoneInfo(self.timezone_name)
 
     @property

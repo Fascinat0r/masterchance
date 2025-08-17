@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Boolean, ForeignKey, Integer, DateTime, Float
+from sqlalchemy import Column, String, Boolean, ForeignKey, Integer, DateTime, Float, Index
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 
@@ -101,3 +101,22 @@ class AdmissionDiagnosticsModel(Base):
     p_excluded = Column(Float, nullable=False)  # доля симуляций, где был исключён
     p_fail_when_included = Column(Float, nullable=False)  # провал среди включённых
     applicant = relationship("ApplicantModel")
+
+
+class ExamSessionModel(Base):
+    __tablename__ = "exam_sessions"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    program_code = Column(String, ForeignKey("programs.code"), nullable=False, index=True)
+    exam_code = Column(String, nullable=True)  # "Код" из расписания (напр. 38.04.05_06)
+    dt = Column(DateTime, nullable=False)  # Москва, tz-naive
+    institute = Column(String, nullable=True)
+    education_form = Column(String, nullable=True)
+    contract = Column(String, nullable=True)
+    program_name = Column(String, nullable=True)
+    program_pdf_url = Column(String, nullable=True)
+
+    program = relationship("ProgramModel")
+
+
+# Индекс для ускорения выборок
+Index("ix_exam_sessions_program_dt", ExamSessionModel.program_code, ExamSessionModel.dt)

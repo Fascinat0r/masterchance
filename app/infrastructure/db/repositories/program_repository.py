@@ -11,12 +11,13 @@ from sqlalchemy.orm import Session
 
 from app.domain.models import (
     Institute, Department, Program,
-    SubmissionStats, Applicant, Application, ProgramPassingQuantile, AdmissionProbability, AdmissionDiagnostics
+    SubmissionStats, Applicant, Application, ProgramPassingQuantile, AdmissionProbability, AdmissionDiagnostics,
+    ExamSession
 )
 from app.infrastructure.db.models import (
     InstituteModel, DepartmentModel, ProgramModel,
     SubmissionStatsModel, ApplicantModel, ApplicationModel, ProgramQuantileModel, AdmissionProbabilityModel,
-    AdmissionDiagnosticsModel
+    AdmissionDiagnosticsModel, ExamSessionModel
 )
 
 
@@ -141,6 +142,19 @@ class ProgramRepository:
             applicant_id=p.applicant_id,
             program_code=p.program_code,
             probability=p.probability,
+        )
+
+    @staticmethod
+    def _to_exam_session_model(e: ExamSession) -> ExamSessionModel:
+        return ExamSessionModel(
+            program_code=e.program_code,
+            exam_code=e.exam_code,
+            dt=e.dt,
+            institute=e.institute,
+            education_form=e.education_form,
+            contract=e.contract,
+            program_name=e.program_name,
+            program_pdf_url=e.program_pdf_url,
         )
 
     # ——— CRUD МЕТОДЫ ——————————————————————————————————————————————
@@ -440,6 +454,86 @@ class ProgramRepository:
             .scalar()
         )
         return ts
+
+    def clear_exam_sessions(self) -> None:
+        self._session.execute(delete(ExamSessionModel))
+
+    def add_exam_sessions_bulk(self, sessions: Iterable[ExamSession]) -> None:
+        objs = [self._to_exam_session_model(s) for s in sessions]
+        if objs:
+            self._session.bulk_save_objects(objs)
+
+    def get_exam_sessions_by_program(self, program_code: str) -> list[ExamSession]:
+        rows = (
+            self._session.query(ExamSessionModel)
+            .filter_by(program_code=program_code)
+            .order_by(ExamSessionModel.dt.asc())
+            .all()
+        )
+        out: list[ExamSession] = []
+        for r in rows:
+            out.append(ExamSession(
+                program_code=r.program_code,
+                exam_code=r.exam_code,
+                dt=r.dt,
+                institute=r.institute,
+                education_form=r.education_form,
+                contract=r.contract,
+                program_name=r.program_name,
+                program_pdf_url=r.program_pdf_url,
+            ))
+        return out
+
+    # ─── Поиск программы по имени в рамках кафедры ────────────────────────
+    def find_program_code_by_name_and_dept(self, program_name: str, dept_code: str) -> str | None:
+        """
+        Возвращает код нашей программы по точному / почти точному совпадению имени
+        в рамках заданной кафедры (department_code).
+        """
+        # 1) точное сравнение (регистр/пробелы игнорируем)
+        q_exact = (
+            self._session.query(ProgramModel.code)
+            .filter(
+                ProgramModel.department_code == dept_code,
+                func.lower(func.trim(ProgramModel.name)) == func.lower(func.trim(program_name))
+            )
+        ).one_or_none()
+        if q_exact:
+            return q_exact[0]
+
+        # 2) fallback: ILIKE по вхождению (на случай мелких расхождений)
+        q_like = (
+            self._session.query(ProgramModel.code)
+            .filter(
+                ProgramModel.department_code == dept_code,
+                func.lower(ProgramModel.name).ilike(f"%{program_name.lower()}%")
+            )
+            .limit(2)
+            .all()
+        )
+        if len(q_like) == 1:
+            return q_like[0][0]
+        return None
+
+    def get_all_exam_sessions(self) -> list[ExamSession]:
+        rows = (
+            self._session.query(ExamSessionModel)
+            .order_by(ExamSessionModel.program_code.asc(), ExamSessionModel.dt.asc())
+            .all()
+        )
+        out: list[ExamSession] = []
+        for r in rows:
+            out.append(ExamSession(
+                program_code=r.program_code,
+                exam_code=r.exam_code,
+                dt=r.dt,
+                institute=r.institute,
+                education_form=r.education_form,
+                contract=r.contract,
+                program_name=r.program_name,
+                program_pdf_url=r.program_pdf_url,
+            ))
+        return out
 
     def commit(self) -> None:
         self._session.commit()

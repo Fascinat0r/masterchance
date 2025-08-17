@@ -107,3 +107,18 @@ class AdmissionDiagnostics:
     applicant_id: str
     p_excluded: float
     p_fail_when_included: float
+
+@dataclass
+class ExamSession:
+    """
+    Дата/время вступительного испытания, привязанная к нашей программе.
+    Время в час. по Москве, tz-naive (как submission_stats).
+    """
+    program_code: str            # FK -> programs.code (наш внутренний код)
+    exam_code: str | None        # "Код" со страницы, напр. "38.04.05_06"
+    dt: datetime.datetime        # дата и время экзамена
+    institute: str | None = None
+    education_form: str | None = None  # Очная / Заочная
+    contract: str | None = None        # Бюджет / Контракт
+    program_name: str | None = None    # как на сайте расписания
+    program_pdf_url: str | None = None
