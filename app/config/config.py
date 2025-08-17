@@ -30,6 +30,8 @@ class Settings(BaseSettings):
 
     chrome_bin: str = Field("CHROME_BIN", alias="CHROME_BIN")
 
+    parser_parallelism = Field(8, alias="PARSER_PARALLELISM")
+
     # БД
     db_url: str | None = Field(None, alias="DATABASE_URL")
     db_filename: str = Field("master.db", alias="DB_FILENAME")

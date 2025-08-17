@@ -9,8 +9,6 @@ from app.config.config import settings
 from app.config.logger import logger
 from app.infrastructure.db.models import Base
 from app.infrastructure.db.repositories.program_repository import ProgramRepository
-from app.infrastructure.parser.master_applications_parser import MasterApplicationsParser
-
 
 def main():
     logger.info("=== masterchance старт ===")
@@ -26,12 +24,12 @@ def main():
     # 2) Инициализация
     session = Session()
     repo = ProgramRepository(session)
-    parser = MasterApplicationsParser(headless=True)
-    updater = UpdateApplicationListsUseCase(repo=repo, parser=parser)
+    updater = UpdateApplicationListsUseCase(repo=repo)  # parser не нужен для параллельного режима
 
     # 3) Запуск
     try:
-        updater.execute()
+        parallelism = settings.parser_parallelism
+        updater.execute_parallel(parallelism=parallelism, headless=True)
         logger.info("Данные по подаче заявлений успешно обновлены.")
         print("✅ Данные по подаче заявлений успешно обновлены.")
     except Exception as e:
