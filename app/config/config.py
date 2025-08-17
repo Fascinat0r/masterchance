@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     # Включение механики заморозки нулей по истёкшим экзаменам
     exam_freeze_enabled: bool = Field(True, alias="MC_EXAM_FREEZE_ENABLED")
     # Грация (в часах) после последней даты экзамена
-    exam_grace_hours: int = Field(24, alias="MC_EXAM_GRACE_HOURS")
+    exam_grace_hours: int = Field(36, alias="MC_EXAM_GRACE_HOURS")
 
     @model_validator(mode="before")
     def _preprocess(cls, values: dict[str, Any]) -> dict[str, Any]:

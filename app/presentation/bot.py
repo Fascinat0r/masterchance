@@ -2,13 +2,14 @@
 Telegram-бот, показывающий направления, квантили и шансы.
 """
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from textwrap import dedent
 from typing import List, Dict
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import CommandStart, Command, CommandObject
+from aiogram.filters import CommandStart, Command
 from aiogram.types import Message
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -16,13 +17,15 @@ from sqlalchemy.orm import sessionmaker
 from app.application.use_cases.get_last_update_time import GetLastUpdateTimeUseCase
 from app.config.config import settings
 from app.config.logger import logger
-from app.domain.models import Program
+from app.domain.models import Program, Application, ExamSession
 from app.infrastructure.db.models import Base
 from app.infrastructure.db.repositories.program_repository import ProgramRepository
 
 _engine = create_engine(settings.database_url, echo=False, future=True)
 Base.metadata.create_all(_engine)
 _Session = sessionmaker(bind=_engine, future=True)
+
+_SRC_TZ = ZoneInfo("Europe/Moscow")  # расписание и сайт — МСК
 
 
 def split_message(text: str, max_len: int = 4000) -> List[str]:
@@ -38,10 +41,77 @@ def split_message(text: str, max_len: int = 4000) -> List[str]:
     return parts
 
 
-def _human_prog_line(dept_code: str, prog_name: str, q90: float | None, q95: float | None) -> str:
-    safe = f"{q90:.0f}" if q90 is not None else "—"
-    high = f"{q95:.0f}" if q95 is not None else "—"
-    return f"• `{dept_code}`  *{prog_name}*  —  средний ={safe}, высокий ={high}"
+def _fmt_qrange(q) -> str:
+    """
+    Преобразует квантили в строку `X - X`. Если нет данных — вернёт '—'.
+    """
+    if not q:
+        return "—"
+    try:
+        if q.q90 == q.q95:
+            return f"{q.q90:.0f}"
+        else:
+            return f"{q.q90:.0f} - {q.q95:.0f}"
+    except Exception:
+        return "—"
+
+
+def _human_prog_line(dept_code: str, prog_name: str) -> str:
+    return f"• `{dept_code}`  *{prog_name}*"
+
+
+def _fmt_local_from_msk_naive(dt_naive_msk: datetime) -> str:
+    """
+    На входе tz-naive время в МСК (как в БД). Возвращаем строку в целевой зоне settings.timezone.
+    """
+    aware_msk = dt_naive_msk.replace(tzinfo=_SRC_TZ)
+    local = aware_msk.astimezone(settings.timezone)
+    # без года — компактнее, но при желании можно добавить %Y
+    return local.strftime("%d.%m %H:%M")
+
+
+def _exam_info_line(app: Application | None, sessions: List[ExamSession] | None) -> str | None:
+    """
+    Возвращает одну «подстрочку» для направления:
+      • если есть баллы — показываем их (без второго предмета);
+      • иначе — ближайшие даты экзаменов (до 3 шт.);
+      • если дат нет — сообщаем, что расписания пока нет / экзамены прошли.
+      • если последний экзамен был < 3 дней назад — добавляем предупреждение.
+    """
+    # 1) Есть результат
+    if app and ((app.vi_score and app.vi_score > 0) or (app.subject1_score and app.subject1_score > 0)):
+        parts = []
+        if app.subject1_score > 0:
+            parts.append(f"предм.1={app.subject1_score}")
+        if app.vi_score > 0:
+            parts.append(f"ВИ={app.vi_score}")
+        detail = ", ".join(parts) if parts else "баллы получены"
+        return f"   ↳ 🟢 Cдан: {detail}"
+
+    # 2) Нет результата — подскажем даты
+    sessions = sessions or []
+    if not sessions:
+        return "   ↳ 🟡 Расписание экзамена пока не опубликовано"
+
+    now_msk = datetime.now(_SRC_TZ)
+    upcoming = [s for s in sessions if s.dt.replace(tzinfo=_SRC_TZ) >= now_msk]
+    if upcoming:
+        show = upcoming[:3]
+        dates = "; ".join(_fmt_local_from_msk_naive(s.dt) for s in show)
+        more = " …" if len(upcoming) > 3 else ""
+        return f"   ↳ 🟡 Ближайшие экзамены: {dates}{more}"
+    else:
+        last_dt = sessions[-1].dt
+        line = f"   ↳ ⚪ Экзамены завершились (последняя дата: {_fmt_local_from_msk_naive(last_dt)})"
+        # Предупреждение: прошло < 3 дней после последнего экзамена
+        try:
+            last_aware = last_dt.replace(tzinfo=_SRC_TZ)
+            delta = now_msk - last_aware
+            if delta.total_seconds() >= 0 and delta < timedelta(days=3):
+                line += "\n   ↳ ⚠️ прошло < 3 дней — результаты могут ещё обновляться."
+        except Exception:
+            pass
+        return line
 
 
 def _format_response(applicant_id: str,
@@ -49,103 +119,64 @@ def _format_response(applicant_id: str,
                      probs_uncond: Dict[str, float],
                      quantiles,
                      prog_map: Dict[str, Program],
-                     diag) -> str:
+                     diag,
+                     apps_by_code: Dict[str, Application],
+                     sessions_by_code: Dict[str, List[ExamSession]]) -> str:
     """
-    Формирует Markdown-ответ. Показывает:
-      1) Квантили;
-      2) Вероятности «если вы точно идёте в Политех» (условные);
-      3) «С учётом оттока 20%» (безусловные);
-      4) Во сколько % симуляций вы «пролетели с магой» (оба варианта).
+    Новый порядок:
+      1) Список направлений + строка про экзамены (баллы/даты).
+      2) 🔮 Прогноз зачисления (условные вероятности), под каждой строкой — «проходной: X - X».
+      3) Блок про «пролёт».
     """
     if not all_codes:
         return f"У абитуриента `{applicant_id}` нет поданных заявок 🤷‍♂️"
 
-    head1 = "📝 *Ваши направления и ориентиры балла*"
+    # 1) Направления + экзамены
+    head_programs = "📝 *Ваши направления*"
     prog_lines: List[str] = []
     for code in all_codes:
         prog = prog_map.get(code)
-        q = quantiles.get(code)
-        prog_lines.append(
-            _human_prog_line(
-                dept_code=(prog.department_code if prog else code.split('.')[0]),
-                prog_name=(prog.name if prog else code),
-                q90=(q.q90 if q else None),
-                q95=(q.q95 if q else None),
-            )
+        line = _human_prog_line(
+            dept_code=(prog.department_code if prog else code.split('.')[0]),
+            prog_name=(prog.name if prog else code),
         )
+        prog_lines.append(line)
 
-    # Диагностика
+        app = apps_by_code.get(code)
+        sess = sessions_by_code.get(code, [])
+        exam_line = _exam_info_line(app, sess)
+        if exam_line:
+            prog_lines.append(exam_line)
+
+    # 2) Вероятности (условные) + проходные ниже той же строки
     p_excl = diag.p_excluded if diag else 0.0
     p_incl = max(1.0 - p_excl, 1e-9)
-
-    # Условные вероятности (как если пользователь точно остаётся)
     probs_cond: Dict[str, float] = {k: min(v / p_incl, 1.0) for k, v in probs_uncond.items()}
 
-    # «Пролетел»:
-    fail_uncond = max(0.0, 1.0 - sum(probs_uncond.values()))
-    fail_cond   = min(1.0, (diag.p_fail_when_included if diag else fail_uncond / p_incl))
-
-    # Блоки вероятностей
-    head2 = "\n\n🔮 *Вероятность зачисления*"
-    lines_cond: List[str] = []
+    head_forecast = "\n\n🔮 *Прогноз зачисления*"
+    forecast_lines: List[str] = []
     for code in all_codes:
+        pname = prog_map[code].name if code in prog_map else code
         p = probs_cond.get(code)
-        if p is not None:
-            pname = prog_map[code].name if code in prog_map else code
-            lines_cond.append(f"• `{pname}`  →  *{p * 100:.1f}%*")
+        p_str = f"{p * 100:.1f}%" if p is not None else "—"
+        q = quantiles.get(code)
+        forecast_lines.append(f"• `{pname}`  →  *{p_str}* (проходной: {_fmt_qrange(q)})")
 
-    # head3 = "\n\n♻️ *С учётом 20% оттока (общая модель)*"
-    # lines_uncond: List[str] = []
-    # for code in all_codes:
-    #     p = probs_uncond.get(code)
-    #     if p is not None:
-    #         pname = prog_map[code].name if code in prog_map else code
-    #         lines_uncond.append(f"• `{pname}`  →  *{p * 100:.1f}%*")
-
-    head4 = (
+    # 3) «Пролёт»
+    fail_uncond = max(0.0, 1.0 - sum(probs_uncond.values()))
+    fail_cond = min(1.0, (diag.p_fail_when_included if diag else fail_uncond / p_incl))
+    head_fail = (
         "\n\n🚫 *«Пролетел с магой»*\n"
-        f"• В *{fail_cond*100:.1f}%* симуляций\n"
+        f"• В *{fail_cond * 100:.1f}%* симуляций\n"
     )
 
-    # По умолчанию показываем условные сверху (настраивается в settings)
-    if settings.bot_show_anchored:
-        return "\n".join([head1, *prog_lines, head2, *lines_cond, head4])
-    else:
-        return "\n".join([head1, *prog_lines, head4, head2, *lines_cond])
+    return "\n".join([head_programs, *prog_lines, head_forecast, *forecast_lines, head_fail])
 
 
 async def how_cmd(msg: Message):
     await msg.answer(dedent("""
     🧠 *Как работает прогноз?*
-
-    Прогноз построен по методу Монте‑Карло — это способ смоделировать тысячи возможных будущих сценариев. Вот как это работает шаг за шагом:
-
-    1. **Повторяем симуляцию десятки тысяч раз** — это как доктор Стрэндж, просматривающий альтернативные вселенные.
-
-    2. **У кого уже есть балл по вступительному — он сохраняется.**
-
-    3. **Если балла по экзамену нет**, он симулируется (считается случайно), но не просто так:
-       • если ты уже сдавал хотя бы на одном направлении — считаем что в среднем ты сдашь примерно также и остальные.
-       • если ещё не сдавал, но есть заявки на направления, где другие уже сдавали — берём статистику по ним;
-       • если ни ты, ни другие ничего не сдавали — используем глобальную статистику по всем.
-
-    4. **После этого балл складывается с индивидуальными достижениями**, и получается полный конкурсный балл.
-
-    5. **Имитация конкурса как в вузе**:
-       • сначала все абитуриенты «распределяются» по 1‑м приоритетам;
-       • если кто-то не проходит — перекидываются на 2‑й приоритет, и так далее.
-
-    6. **Результат:**
-       • если ты попал на направление в 8 000 симуляциях из 10 000, шанс ≈ 80%;
-       • считаем также «средний» и «высокий» проходной балл (90 % и 95 % квантиль).
-
-    ⚠️ *Предсказания не гарантируют поступление!*
-    Это всего лишь вероятностная модель на основе того, что уже известно.
-    **Также, модель не учитывает:**
-        • Наличие заявок в другие вузы.
-        • "Неявку" на вступительные испытания.
-    В следствии чего шансы принято считать пессимистичными.
-    
+    ...
     """).strip(), parse_mode="Markdown")
 
 
@@ -165,8 +196,10 @@ async def start_cmd(msg: Message):
     await msg.answer(
         dedent(f"""
         Привет! Отправь мне **код абитуриента** — покажу все направления, 
-        куда поданы документы, «средний» (90 %) и «высокий» (95 %) 
-        проходные баллы и шанс зачисления.
+        ориентиры проходных баллов и шанс зачисления.
+        
+        Дополнительно: по каждому направлению — *либо твои баллы за экзамен*, 
+        *либо ближайшие даты экзаменов*, если ещё не сдавал.
 
         Последнее обновление данных: **{_fmt(last_dt)}**
 
@@ -193,6 +226,7 @@ async def applicant_handler(msg: Message):
             )
             return
 
+        # Вероятности / квантили / метаданные программ
         prob_objs = repo.get_probabilities_for_applicant(applicant_id)
         probs_uncond = {p.program_code: p.probability for p in prob_objs}
 
@@ -201,7 +235,20 @@ async def applicant_handler(msg: Message):
 
         diag = repo.get_diagnostics_for_applicant(applicant_id)
 
-        full_text = _format_response(applicant_id, all_codes, probs_uncond, quantiles, prog_map, diag)
+        # Новое: заявки абитуриента с баллами по конкретным программам
+        apps = repo.get_applications_by_applicant(applicant_id)
+        apps_by_code: Dict[str, Application] = {a.program_code: a for a in apps if a.program_code in all_codes}
+
+        # Новое: ближайшие экзамены по каждой программе
+        sessions_by_code: Dict[str, List[ExamSession]] = {}
+        for code in all_codes:
+            sessions_by_code[code] = repo.get_exam_sessions_by_program(code)
+
+        full_text = _format_response(
+            applicant_id, all_codes, probs_uncond, quantiles, prog_map, diag,
+            apps_by_code=apps_by_code, sessions_by_code=sessions_by_code
+        )
+
         for part in split_message(full_text):
             try:
                 await msg.answer(part, parse_mode="Markdown")

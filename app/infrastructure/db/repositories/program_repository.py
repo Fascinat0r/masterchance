@@ -535,5 +535,17 @@ class ProgramRepository:
             ))
         return out
 
+    def get_applications_by_applicant(self, applicant_id: str) -> list[Application]:
+        """
+        Все заявки данного абитуриента (на все программы).
+        Удобно, чтобы в боте показать его баллы по конкретной программе.
+        """
+        models = (
+            self._session.query(ApplicationModel)
+            .filter_by(applicant_id=applicant_id)
+            .all()
+        )
+        return [self._to_application_domain(m) for m in models]
+
     def commit(self) -> None:
         self._session.commit()
