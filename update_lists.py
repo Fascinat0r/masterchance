@@ -4,11 +4,13 @@ import sys
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app.application.use_cases.recalculate_monte_carlo import RecalculateMonteCarloUseCase
 from app.application.use_cases.update_lists import UpdateApplicationListsUseCase
 from app.config.config import settings
 from app.config.logger import logger
 from app.infrastructure.db.models import Base
 from app.infrastructure.db.repositories.program_repository import ProgramRepository
+
 
 def main():
     logger.info("=== masterchance старт ===")
@@ -35,10 +37,23 @@ def main():
     except Exception as e:
         logger.exception("Ошибка при обновлении данных")
         print("❌ Ошибка при обновлении:", e, file=sys.stderr)
+        session.close()
+        logger.info("Сессия БД закрыта.")
+        sys.exit(1)
+
+    logger.info("=== masterchance завершён ===")
+
+    try:
+        repo = ProgramRepository(session)
+        use_case = RecalculateMonteCarloUseCase(repo=repo, n_simulations=10_000)
+        use_case.execute()
+        logger.info("✅ Monte‑Carlo успешно пересчитан.")
+    except Exception as exc:
+        logger.exception("❌ Ошибка Monte‑Carlo: %s", exc)
         sys.exit(1)
     finally:
         session.close()
-        logger.info("=== masterchance завершён ===")
+        logger.info("Сессия БД закрыта.")
 
 
 if __name__ == "__main__":

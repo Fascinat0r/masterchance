@@ -21,13 +21,10 @@ RANK_SCALE = 100
 
 
 def _kde_resample(kde: gaussian_kde, n: int, rng: np.random.Generator) -> np.ndarray:
-    """
-    Безопасная выборка из gaussian_kde для случаев, когда random_state недоступен.
-    """
+    """Безопасная выборка из gaussian_kde для случаев, когда random_state недоступен."""
     try:
         return kde.resample(n, random_state=rng).ravel()
     except TypeError:
-        # старые SciPy: нет random_state → временно «подменим» глобальный seed
         seed = int(rng.integers(0, 2 ** 32 - 1, dtype=np.uint32))
         saved_state = np.random.get_state()
         try:
@@ -124,12 +121,10 @@ def _simulate_admission_numba(priority, program_idx, applicant_idx,
 
 class AdmissionMonteCarlo:
     """
-    MC-модель шансов зачисления:
-      • Импутация баллов ВИ (по personal μ, либо по CDF по экзамену, либо глобальная CDF).
-      • Опциональный «opt-out» (исключение части абитуриентов без согласий).
-      • «Заморозка нулей» по истёкшим экзаменам:
-          если для пары (абитуриент × exam_id) все vi=0, и exam_id помечен как истёкший,
-          то нули остаются нулями навсегда (импутация НЕ выполняется).
+    MC-модель шансов зачисления (без opt-out), с поддержкой «заморозки» нулей по истёкшим экзаменам.
+      • Импутация ВИ: по personal μ → CDF конкретного экзамена → глобальная CDF.
+      • Freeze: если для (applicant×exam_id) нет ни одной известной оценки и exam_id помечен как истёкший,
+        нули остаются нулями (импутации нет).
     """
 
     def __init__(self,
@@ -145,25 +140,13 @@ class AdmissionMonteCarlo:
         self.n_sim = n_simulations
         self.rng = np.random.default_rng(random_seed)
 
-        # Настройки opt-out
-        self.opt_out_enabled = settings.opt_out_enabled
-        self.opt_out_ratio = float(settings.opt_out_ratio)
-        self.opt_out_alpha = float(settings.opt_out_alpha)
-        self.opt_out_mode = settings.opt_out_mode
-
         # Freeze экзаменов
         self.freeze_expired_exams = (
             settings.exam_freeze_enabled if freeze_expired_exams is None else bool(freeze_expired_exams)
         )
         self._expired_exam_ids_in = set(expired_exam_ids or [])
-
         logger.info(
-            "AdmissionMonteCarlo: подготовка данных… "
-            "(opt-out: %s, ratio=%.3f, alpha=%.2f, mode=%s; exam-freeze: %s)",
-            "ON" if self.opt_out_enabled else "OFF",
-            self.opt_out_ratio,
-            self.opt_out_alpha,
-            self.opt_out_mode,
+            "AdmissionMonteCarlo: подготовка данных… (exam-freeze: %s)",
             "ON" if self.freeze_expired_exams else "OFF",
         )
 
@@ -200,20 +183,26 @@ class AdmissionMonteCarlo:
         self.applicant_idx = applications["applicant_id"].map(self._applicant2idx).to_numpy(np.int32, copy=False)
         self.program_idx = applications["program_code"].map(self._program2idx).to_numpy(np.int32, copy=False)
         self.priority = applications["priority"].to_numpy(np.int16, copy=False)
+        # Нормализация приоритетов: pr<=0 → глобальный max+1 (считаем наихудшим)
+        if (self.priority <= 0).any():
+            pr = self.priority.copy()
+            pos = pr[pr > 0]
+            max_pos = int(pos.max()) if pos.size else 1
+            pr[pr <= 0] = max_pos + 1
+            fixed = int((self.priority <= 0).sum())
+            self.priority = pr
+            logger.info("Нормализованы приоритеты: исправлено %d записей с pr<=0 → %d",
+                        fixed, max_pos + 1)
+
         self.vi_score = applications[SCORE_COL].to_numpy(np.int16, copy=False)
         self.id_ach = applications["id_achievements"].to_numpy(np.int16, copy=False)
-        self.consent = applications["consent"].to_numpy(bool, copy=False)
 
         # Ряды по (applicant, exam) и по applicant
         self._rows_by_app_exam: Dict[Tuple[int, int], np.ndarray] = {}
-        self._rows_by_applicant: Dict[int, np.ndarray] = {}
         for r, (a, e) in enumerate(zip(self.applicant_idx, self.exam_idx)):
             self._rows_by_app_exam.setdefault((a, e), []).append(r)
-            self._rows_by_applicant.setdefault(a, []).append(r)
         for k in list(self._rows_by_app_exam):
             self._rows_by_app_exam[k] = np.asarray(self._rows_by_app_exam[k], dtype=np.int32)
-        for k in list(self._rows_by_applicant):
-            self._rows_by_applicant[k] = np.asarray(self._rows_by_applicant[k], dtype=np.int32)
 
         # --- Персональные средние (μ) ---------------------------------------
         logger.info("→ вычисляем personal_mu …")
@@ -232,8 +221,6 @@ class AdmissionMonteCarlo:
         self._exam_cdf = np.zeros((self.n_exams, MAX_EXAM_SCORE), np.float32)
 
         global_samples = self.vi_score[known].astype(np.float64)
-        # NB: предполагаем, что глобальных образцов достаточно.
-        # (В реальных данных это верно; иначе можно ввести равномерную CDF.)
         g_kde = gaussian_kde(global_samples, bw_method="scott")
         g_raw = _kde_resample(g_kde, KDE_RESAMPLE_N, self.rng)
         g_raw = np.clip(np.rint(g_raw), 1, MAX_EXAM_SCORE).astype(int)
@@ -263,6 +250,14 @@ class AdmissionMonteCarlo:
             if p_code in self._program2idx:
                 self.seats_per_program[self._program2idx[p_code]] = int(seats)
 
+        # --- Диагностические/выходные коллекции -----------------------------
+        self.admit_counter = np.zeros((self.n_applicants, self.n_programs), np.int32)
+        self.pass_scores_collect = [[] for _ in range(self.n_programs)]
+        self._apps_by_applicant: Dict[str, List[str]] = (
+            applications.groupby("applicant_id")["program_code"].apply(list).to_dict()
+        )
+        self.global_sigma = float(global_samples.std(ddof=1)) if global_samples.size else 15.0
+
         # --- Заморозка нулей по истёкшим экзаменам (подготовка) -------------
         # Для каждой группы (applicant×exam) отметим freeze, если:
         #   • exam_freeze включен;
@@ -280,7 +275,6 @@ class AdmissionMonteCarlo:
                     frozen_groups += 1
                     frozen_rows_total += int(rows.size)
         else:
-            # быстрое «все False», чтобы не плодить ветвлений в симуляции
             for k in self._rows_by_app_exam.keys():
                 self._freeze_group[k] = False
 
@@ -289,68 +283,9 @@ class AdmissionMonteCarlo:
             n_expired_ids, frozen_groups, frozen_rows_total
         )
 
-        # --- Пул opt-out: кандидаты E и веса --------------------------------
-        any_unconsented = np.zeros(self.n_applicants, dtype=bool)
-        for a_idx in range(self.n_applicants):
-            rows = self._rows_by_applicant.get(a_idx, [])
-            if rows.size:
-                any_unconsented[a_idx] = (~self.consent[rows]).any()
-
-        # «Сила» абитуриента: максимум текущего vi_score по его заявкам (0 если неизвестно)
-        max_vi = np.zeros(self.n_applicants, dtype=np.int16)
-        for a_idx, rows in self._rows_by_applicant.items():
-            max_vi[a_idx] = int(self.vi_score[rows].max(initial=0))
-
-        # Ранги в [0,1] (избегаем нулевых весов)
-        if max_vi.max() > max_vi.min():
-            ranks = (max_vi - max_vi.min()) / (max_vi.max() - max_vi.min())
-        else:
-            ranks = np.zeros_like(max_vi, dtype=np.float32)
-        base_w = np.power(ranks, self.opt_out_alpha).astype(np.float64)
-        base_w += 1e-9  # защита от нулей
-        self._opt_pool_mask = any_unconsented
-        self._opt_weights = base_w
-
-        # Диагностика, коллекции результатов
-        self.excluded_counter = np.zeros(self.n_applicants, np.int32)      # сколько раз был исключён
-        self.fail_included_counter = np.zeros(self.n_applicants, np.int32) # среди включённых — не поступил
-        self._last_sampled_excluded = None
-
-        self.admit_counter = np.zeros((self.n_applicants, self.n_programs), np.int32)
-        self.pass_scores_collect = [[] for _ in range(self.n_programs)]
-        self._apps_by_applicant: Dict[str, List[str]] = (
-            applications.groupby("applicant_id")["program_code"].apply(list).to_dict()
-        )
-        self.global_sigma = float(global_samples.std(ddof=1)) if global_samples.size else 15.0
-
-        # Если opt-out=ON и есть пул — логируем размер
-        if self.opt_out_enabled:
-            E = int(self._opt_pool_mask.sum())
-            K = int(np.floor(self.opt_out_ratio * E)) if E > 0 else 0
-            logger.info("→ Opt-out пул (E): %d абитуриентов; будем исключать K=%d (%.1f%%).",
-                        E, K, self.opt_out_ratio * 100.0)
-
-        # Предвыборка «once»
-        self._excluded_once: np.ndarray | None = None
-        if self.opt_out_enabled and self.opt_out_mode == "once" and self._opt_pool_mask.any():
-            self._excluded_once = self._sample_excluded()
-
     # --------------------------------------------------------------------- #
-    def _sample_excluded(self) -> np.ndarray:
-        pool_idx = np.where(self._opt_pool_mask)[0]
-        if pool_idx.size == 0 or not self.opt_out_enabled:
-            return np.array([], dtype=np.int32)
-        K = int(np.floor(self.opt_out_ratio * pool_idx.size))
-        if K <= 0:
-            return np.array([], dtype=np.int32)
-        w = self._opt_weights[pool_idx]
-        w = w / w.sum()
-        excluded = self.rng.choice(pool_idx, size=K, replace=False, p=w).astype(np.int32)
-        return excluded
-
     def _single_simulation(self) -> None:
         vi = self.vi_score.copy()
-        pr = self.priority.copy()
 
         # Импутация по группам (applicant×exam): единый балл на группу.
         for (a_idx, e_idx), rows in self._rows_by_app_exam.items():
@@ -374,52 +309,19 @@ class AdmissionMonteCarlo:
                     score = 1 + int(np.searchsorted(self._exam_cdf[e_idx], u))
                 vi[rows] = score
 
-        # Opt-out: исключаем часть абитуриентов из пула E
-        excluded = np.array([], dtype=np.int32)
-        if self.opt_out_enabled and self._opt_pool_mask.any():
-            if self._excluded_once is not None:
-                excluded = self._excluded_once
-            else:
-                excluded = self._sample_excluded()
-
-            if excluded.size > 0:
-                max_prio = int(pr.max())
-                for a_idx in excluded:
-                    rows = self._rows_by_applicant.get(int(a_idx), None)
-                    if rows is not None and rows.size:
-                        pr[rows] = max_prio + 1  # выводим за пределы цикла приоритетов
-                self.excluded_counter[excluded] += 1
-
-                # редкий DEBUG-лог
-                if self.rng.random() < 0.003:
-                    ex = int(excluded[0])
-                    self._last_sampled_excluded = ex
-                    logger.debug("Отток в симуляции: исключены %d абитуриентов (пример a_idx=%s…)", excluded.size, ex)
-
         total = (vi + self.id_ach).astype(np.int16)
         jitter = self.rng.random(self._rows).astype(np.float32)
 
         admitted, passing = _simulate_admission_numba(
-            pr, self.program_idx, self.applicant_idx,
+            self.priority, self.program_idx, self.applicant_idx,
             total, self.seats_per_program, jitter,
-            max_priority=int(pr.max()),
+            max_priority=int(self.priority.max()),
         )
 
         # Счётчики поступлений по программам
         for a_idx, p_idx in enumerate(admitted):
             if p_idx != -1:
                 self.admit_counter[a_idx, p_idx] += 1
-
-        # Диагностика «провалился среди включённых»
-        if self.opt_out_enabled and self._opt_pool_mask.any():
-            incl_mask = np.ones(self.n_applicants, dtype=bool)
-            incl_mask[excluded] = False
-            fail_mask = (admitted == -1) & incl_mask
-            self.fail_included_counter[fail_mask] += 1
-        else:
-            # Если opt-out OFF, то «включён» = все
-            fail_mask = (admitted == -1)
-            self.fail_included_counter[fail_mask] += 1
 
         # Проходные баллы
         for p_idx, scr in enumerate(passing):
@@ -455,27 +357,23 @@ class AdmissionMonteCarlo:
             if (scores := np.asarray(self.pass_scores_collect[p_idx])).size
         }
 
-        # Диагностика: отток и «пролёты»
-        p_excluded = self.excluded_counter / self.n_sim
-        included_cnt = np.maximum(self.n_sim - self.excluded_counter, 1)  # защита от деления на ноль
-        p_fail_included = self.fail_included_counter / included_cnt
-
+        # Диагностика в «докапаутной» трактовке:
+        #   p_excluded = 0 (никого не исключали),
+        #   p_fail_when_included = доля «не поступил» среди всех прогонов.
+        admitted_totals = self.admit_counter.sum(axis=1)  # по applicant: число прогонов с зачислением
         self.diag = {
             aid: {
-                "p_excluded": float(p_excluded[self._applicant2idx[aid]]),
-                "p_fail_when_included": float(p_fail_included[self._applicant2idx[aid]]),
+                "p_excluded": 0.0,
+                "p_fail_when_included": float(1.0 - (admitted_totals[self._applicant2idx[aid]] / self.n_sim)),
             }
             for aid in self._applicant2idx
         }
 
         logger.info(
-            "Monte-Carlo завершён: %d абитуриентов; %d направлений с квантилями. "
-            "Opt-out: %s, пул=%d, режим=%s",
+            "Monte-Carlo завершён: %d абитуриентов; %d направлений с квантилями. (без opt-out, freeze=%s)",
             len(self.p_admit),
             len(self.pass_score_quantiles),
-            "ON" if self.opt_out_enabled else "OFF",
-            int(self._opt_pool_mask.sum()),
-            self.opt_out_mode,
+            "ON" if self.freeze_expired_exams else "OFF",
         )
 
     # ------------------------------ API --------------------------------- #

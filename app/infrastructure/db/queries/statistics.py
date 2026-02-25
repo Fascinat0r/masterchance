@@ -79,7 +79,7 @@ def programs_with_free_places(
 
 def applicant_with_most_applications(
         session: Session
-) -> Tuple[str, int]:
+) -> Tuple[str, List[int]]:
     """
     Абитуриент, подавший наибольшее число заявок.
     Возвращает (applicant_id, applications_count).
@@ -91,9 +91,10 @@ def applicant_with_most_applications(
         )
         .group_by(ApplicationModel.applicant_id)
         .order_by(desc("cnt"))
-        .limit(1)
+        .limit(10)
+
     )
-    return q.one()
+    return q.all()
 
 
 def top_programs_by_avg_score(
